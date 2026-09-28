@@ -1,0 +1,25 @@
+# Local datasets and derived slices
+data/
+ADNI1/
+processed*/
+*.nii
+*.nii.gz
+*.dcm
+# Training artifacts
+models/
+checkpoints/
+*.h5
+*.keras
+*.pt
+*.pth
+logs/
+# Local environments, credentials, notebook caches
+.venv/
+venv/
+__pycache__/
+.ipynb_checkpoints/
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
