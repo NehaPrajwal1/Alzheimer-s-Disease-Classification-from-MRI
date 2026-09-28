@@ -1,97 +1,136 @@
 # Alzheimer's Disease Classification from MRI (ADNI)
-📌 Project Overview
 
-Alzheimer's disease is a progressive neurodegenerative disorder that primarily affects memory, thinking, and cognitive abilities. Early detection can help support timely intervention and monitoring.
+A research project exploring 2D brain MRI classification using simple CNN,
+ResNet50, EfficientNetB3, and EfficientNetB5 models on an ADNI1-derived dataset.
+The labels are **AD** (Alzheimer's disease), **CN** (cognitively normal), and
+**MCI** (mild cognitive impairment). A separate ResNet50 experiment uses AD/CN only.
 
-This project explores a machine learning and deep learning based approach for the early detection and classification of Alzheimer's disease using brain MRI scans and cognitive/speech-related information.
+This repository records model experiments and lessons from investigating data
+leakage. It is an experimental classification study, not a validated diagnostic
+system or a demonstrated predictor of future disease progression. The available
+code uses MRI slices; cognitive and speech features are not implemented.
 
-The project combines medical imaging with clinical and cognitive features to investigate whether machine learning models can identify patterns associated with Alzheimer's disease and its early stages.
+## Project status
 
-# Project walkthrough
+Three experiment notebooks are available. Historical outputs are documented,
+but **patient-level split independence and patient-level metrics are not yet
+verified**. The final notebook's subject parser does not handle all filename
+formats seen in the earlier experiments. Its phase-1 checkpoint and training
+code are missing, so exact end-to-end reproduction is currently incomplete.
 
-Multi-class (AD / CN / MCI) classification of brain MRI slices using deep learning, built on the ADNI1 dataset. This repo documents three iterations of the modeling pipeline, including a data leakage bug that was found and fixed mid-project.
+## Experiments
 
-## Overview
+| Experiment | Implementation | What it explores |
+| --- | --- | --- |
+| [Baseline and ResNet50](notebooks/01_baseline_resnet50.ipynb) | TensorFlow/Keras; later PyTorch | Slice preprocessing, simple CNN, ResNet50, split audits, binary AD/CN classification |
+| [EfficientNetB3](notebooks/02_efficientnetb3.ipynb) | TensorFlow/Keras | GeM and pooled feature branches, focal loss, class weighting, staged training |
+| [EfficientNetB5](cnn_train_final_v7.ipynb) | TensorFlow/Keras | Resumed training, test-time augmentation, attempted subject-level soft voting |
 
-| Stage | Notebook | Architecture | Key Idea |
-|---|---|---|---|
-| 1 — Baseline | `01_baseline_resnet50.ipynb` | Simple CNN + ResNet50 (transfer learning) | Establish preprocessing pipeline, replicate paper baseline |
-| 2 — Intermediate | `02_efficientnetb3.ipynb` | EfficientNetB3 + GeM pooling + SPP head | Focal loss, cosine LR annealing, 2-phase fine-tuning |
-| 3 — Final | `03_efficientnetb5_final.ipynb` | EfficientNetB5 + MC-Dropout + TTA ensembling | Subject-level evaluation with leakage-free splits |
+See the [notebook guide](notebooks/README.md) for provenance and reading order.
 
 ## Pipeline
 
-1. **Preprocessing** — ADNI1 `.nii` volumes → middle 60 axial slices per scan, normalized and resized to 160×160 (later 224×224), saved as PNG.
-2. **Splitting** — 70/15/15 train/val/test.
-3. **Training** — Transfer learning from ImageNet-pretrained backbones, class-weighted loss to handle AD/CN/MCI imbalance, progressive unfreezing.
-4. **Evaluation** — Both per-slice and per-subject (patient-level majority/soft voting) accuracy, since a scan yields many slices and slice-level accuracy alone is misleading.
+1. Load locally obtained ADNI NIfTI volumes using NiBabel.
+2. Extract the middle 60 slices along array axis 2, normalize each slice to
+   8-bit intensity values, and resize to 160 × 160 PNGs. Anatomical orientation
+   is not verified by the extraction code.
+3. Prepare train/validation/test folders with approximately 70/15/15 proportions.
+   Several splitting attempts are present: the initial version splits volume
+   filenames before extraction; later versions regroup existing PNGs.
+4. Train classifiers. EfficientNet and binary PyTorch inputs are resized to
+   224 × 224. Loss, augmentation, and fine-tuning settings vary by experiment.
+5. Evaluate slice predictions and, in the EfficientNet notebooks, aggregate
+   probabilities using identifiers parsed from filenames.
 
-## Key engineering finding: data leakage
+## What the leakage investigation found
 
-Initial slice-level train/val/test splitting **did not account for the fact that multiple slices come from the same patient**. This let slices from the same subject appear in both train and test sets, inflating reported accuracy.
+The baseline notebook's saved audit reported 38 overlapping scan keys between
+train/test, 40 between train/validation, and 8 between validation/test. A later
+rebuild reported zero overlaps using its scan-key parser.
 
-**Diagnosis:** Wrote a subject-ID extraction + overlap check across splits — found dozens of overlapping subjects (e.g. 38 overlapping between train/test in one run).
+That is useful debugging evidence, but it does **not** establish participant
+independence: baseline and month-6 scans can have different scan keys for the
+same participant. Grouping separately within each diagnosis can also split a
+participant whose diagnosis changes across visits. A global participant manifest
+and strict overlap assertions are the next priority.
 
-**Fix:** Rebuilt the dataset with **subject-level (patient-ID) splitting** — all slices from a given patient are forced into exactly one split — and switched evaluation to **subject-level soft voting** (averaging softmax probabilities across all slices of a scan) rather than trusting raw per-slice accuracy.
+## Historical results
 
-This is the main engineering takeaway of the project: a model can look good on paper while silently leaking patient identity across splits, and per-slice accuracy is not a trustworthy metric for scan-level classification tasks.
+These are saved outputs, not results from a new training run. The B5 numbers
+describe the existing filename-based aggregation and must not be cited as
+verified patient-level performance.
 
-## Results (subject-level, leakage-free test set)
+| Experiment | Evaluation unit | Saved result |
+| --- | --- | --- |
+| EfficientNetB5, AD/CN/MCI | Filename-derived groups; patient grouping unverified | Accuracy **49.33%**, balanced accuracy **41.54%**, macro OvR AUC **0.6019** |
+| EfficientNetB5, AD/CN subset | Same grouping; CN score from the three-class model | AUC **0.6156** |
+| PyTorch ResNet50, AD/CN | **Slices**, after a scan-key split rebuild | Accuracy **67.38%** (3,032 / 4,500 slices; printed report rounds to 0.67) |
 
-**3-class (AD / CN / MCI), EfficientNetB5, final model:**
+The B5 report counts 6,890 groups; unmatched filenames become entire groups, so
+this count cannot be described as 6,890 patients. The binary and three-class
+experiments use different tasks and units and are not a direct model comparison.
+See [results and provenance](results/README.md) for class metrics and limitations.
 
-| Metric | Value |
-|---|---|
-| Subject-level accuracy | 49.3% |
-| Balanced accuracy | 41.5% |
-| Macro AUC (OvR) | 0.60 |
-| AD vs CN AUC | 0.62 |
+![Historical B5 training curves](results/training_curves.png)
 
-**Binary (AD vs CN only), ResNet50, leakage-fixed split:**
+*Saved B5 training curves, extracted from the existing notebook. They do not
+establish that the intended backbone unfreezing took effect.*
 
-| Metric | Value |
-|---|---|
-| Test accuracy | 67% |
-| AD recall / precision | 0.56 / 0.63 |
-| CN recall / precision | 0.76 / 0.70 |
+## Data and setup
 
-Full confusion matrices, training curves, and ROC curves are in `results/`.
-
-## Data
-
-This project uses the **ADNI1** dataset. **No data is included in this repository.** See [`docs/DATA.md`](docs/DATA.md) for access instructions — ADNI data cannot be redistributed under its Data Use Agreement.
-
-## Setup
+ADNI data and trained model weights are not included. Obtain data through
+[ADNI's official access process](https://adni.loni.usc.edu/data-samples/adni-data/)
+and follow the applicable agreement. See [data preparation](docs/DATA.md).
 
 ```bash
-git clone https://github.com/<your-username>/alzheimers-mri-classification.git
-cd alzheimers-mri-classification
-pip install -r requirements.txt
+git clone https://github.com/NehaPrajwal1/Alzheimer-s-Disease-Classification-from-MRI.git
+cd Alzheimer-s-Disease-Classification-from-MRI
 ```
 
+Read the [reproduction guide](docs/REPRODUCIBILITY.md) before installing packages
+or executing notebooks. It lists observed framework versions, dependencies, path
+changes, and missing artifacts. A single environment and one-command training
+workflow have not yet been verified.
+
 ## Repository structure
-notebooks/
-01_baseline_resnet50.ipynb
-02_efficientnetb3.ipynb
-03_efficientnetb5_final.ipynb
-results/
-confusion_matrices.png
-training_curves.png
-roc_curves.png
-docs/
-DATA.md
-requirements.txt
 
+```text
+.
+├── README.md
+├── cnn_train_final_v7.ipynb       # Existing B5 notebook and saved outputs
+├── notebooks/
+│   ├── README.md
+│   ├── 01_baseline_resnet50.ipynb
+│   └── 02_efficientnetb3.ipynb
+├── docs/
+│   ├── DATA.md
+│   ├── REPRODUCIBILITY.md
+│   └── IMPROVEMENTS.md
+└── results/
+    ├── README.md
+    ├── confusion_matrices.png
+    ├── training_curves.png
+    └── roc_curves.png
+```
 
+## Improvements to prioritize
 
+1. Correct participant parsing and split membership across all visits/classes;
+   rerun evaluation on a held-out participant split.
+2. Verify backbone trainability, return per-example focal losses, and correct
+   the inference procedure labeled MC Dropout.
+3. Recover B5 phase-1 artifacts and record a reproducible environment and configuration.
+4. Then compare simpler baselines, multi-slice/3D approaches, and additional
+   modalities on the same splits. Their benefit is a hypothesis to test.
 
-## Limitations
-
-- Accuracy on the 3-class subject-level task is modest (~49%), reflecting the genuine difficulty of separating MCI (an intermediate, heterogeneous stage) from AD and CN using 2D slices alone.
-- 2D slice-based classification discards 3D spatial context available in the full volume; a 3D CNN or multi-slice aggregation approach would likely improve results.
-- Single-timepoint MRI was used; ADNI's longitudinal scans were not leveraged.
+The [prioritized code review](docs/IMPROVEMENTS.md) includes cell references and
+checks for each change. These model fixes have not been applied or evaluated in
+this documentation update; the historical experiments are preserved.
 
 ## Acknowledgment
 
-Data used in this project were obtained from the Alzheimer's Disease Neuroimaging Initiative (ADNI) database (adni.loni.usc.edu). As such, the investigators within ADNI contributed to the design and implementation of ADNI and/or provided data but did not participate in analysis or writing of this work. A complete listing of ADNI investigators is available at:
-http://adni.loni.usc.edu/wp-content/uploads/how_to_apply/ADNI_Acknowledgement_List.pdf
+This project uses data from the Alzheimer's Disease Neuroimaging Initiative
+(ADNI). ADNI investigators contributed to study design, implementation, and/or
+data collection; they did not participate in this project's analysis or writing.
+Consult the [official ADNI publication guidance](https://adni.loni.usc.edu/data-samples/adni-data/)
+for the required acknowledgment language and investigator list for publications.
